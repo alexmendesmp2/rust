@@ -1,0 +1,15 @@
+[package]
+name = "dpkbwrapper"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oracle = "0.5"
+
+[build-dependencies]
+pkg-config = "0.3"
+
+cc = "1.0"
+
+[profile.release]
+opt-level = "z"

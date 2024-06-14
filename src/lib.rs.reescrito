@@ -1,0 +1,88 @@
+use std::net::TcpStream;
+use std::io::{Read, Write};
+use std::ffi::{CString, CStr};
+use std::os::raw::{c_char, c_int};
+
+extern crate oracle;
+use oracle::{Connection, Error, ConnectParams};
+
+#[no_mangle]
+pub extern "C" fn call_hsm(
+    module: *const c_char,
+    exponent: *const c_char,
+    public_key: *mut c_char,
+    private_key: *mut c_char,
+    return_code: *mut c_int,
+    return_reason: *mut c_int) -> *mut c_char {
+
+    let hsm_address_str = "180.0.0.0";
+    let lmk_str = "001";
+    let mut command = String::new();
+
+    unsafe {
+        if private_key.is_null() {
+            let module_str = CStr::from_ptr(module).to_string_lossy().into_owned();
+            let exponent_str = CStr::from_ptr(exponent).to_string_lossy().into_owned();
+
+            command = format!("EI{:02X}{}{:02X}{}{}U", module_str.len() / 2, module_str, exponent_str.len() / 2, exponent_str, lmk_str);
+        } else {
+            command = format!("0000EI00PK;2,12,01");
+        }
+    }
+
+    match TcpStream::connect((hsm_address_str, 1500)) {
+        Ok(mut stream) => {
+            if stream.write_all(command.as_bytes()).is_err() {
+                return CString::new("Erro ao enviar comando ao HSM.").unwrap().into_raw();
+            }
+
+            let mut response = Vec::new();
+            match stream.read_to_end(&mut response) {
+                Ok(_) => {
+                    let c_response = CString::new(response).unwrap();
+                    c_response.into_raw()
+                }
+                Err(_) => {
+                    CString::new("Erro ao receber resposta do HSM.").unwrap().into_raw()
+                }
+            }
+        }
+        Err(_) => {
+            CString::new("Erro ao conectar ao HSM").unwrap().into_raw()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn save_to_oracle(label: *const c_char, key: *const c_char) -> *mut c_char {
+    unsafe {
+        if label.is_null() || key.is_null() {
+            return CString::new("Parâmetros de entrada nulos.").unwrap().into_raw();
+        }
+    }
+
+    let label_str = unsafe { CStr::from_ptr(label) }.to_string_lossy().into_owned();
+    let key_str = unsafe { CStr::from_ptr(key) }.to_string_lossy().into_owned();
+
+    let connect_params = ConnectParams::from_tns("tns_entry_name")
+        .wallet("path/to/wallet", "wallet_password");
+
+    match Connection::connect_with_params(connect_params) {
+        Ok(conn) => {
+            let sql = "INSERT INTO chave_table (LABEL, Key) VALUES (:1, :2)";
+            match conn.execute(sql, &[&label_str as &dyn oracle::sql::ToSql, &key_str as &dyn oracle::sql::ToSql]) {
+                Ok(_) => {
+                    CString::new("Chave salva com sucesso na tabela Oracle.").unwrap().into_raw()
+                }
+                Err(e) => {
+                    CString::new(format!("Erro ao salvar chave na tabela Oracle: {}", e)).unwrap().into_raw()
+                }
+            }
+        }
+        Err(e) => {
+            CString::new(format!("Erro ao conectar ao banco de dados Oracle: {}", e)).unwrap().into_raw()
+        }
+    }
+}
+
+
